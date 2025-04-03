@@ -265,19 +265,29 @@ def plot_embedding_norms(model, save_path, fig_name="embedding_norms.png"):
 
 
 def compute_gradient_stats(model):
-    """Compute gradient statistics for model parameters"""
+    """Compute gradient statistics for model parameters with safety checks"""
     total_norm = 0.0
     grad_stats = {"max_grad": 0.0, "min_grad": float("inf"), "mean_grad": 0.0, "total_params": 0}
 
     param_count = 0
     grad_values = []
+    has_nan = False
+    has_inf = False
 
     for p in model.parameters():
         if p.grad is not None:
+            # Check for NaN and Inf values
+            if torch.isnan(p.grad).any():
+                has_nan = True
+            if torch.isinf(p.grad).any():
+                has_inf = True
+
+            # Replace NaN and Inf values with 0
+            p.grad = torch.nan_to_num(p.grad, nan=0.0, posinf=1e6, neginf=-1e6)
+
             param_norm = p.grad.detach().data.norm(2)
             total_norm += param_norm.item() ** 2
 
-            # Get gradient statistics
             grad_data = p.grad.detach().abs()
             max_grad = grad_data.max().item()
             min_grad = grad_data.min().item()
@@ -291,6 +301,8 @@ def compute_gradient_stats(model):
     grad_stats["total_norm"] = np.sqrt(total_norm)
     grad_stats["mean_grad"] = np.mean(grad_values) if grad_values else 0
     grad_stats["total_params"] = param_count
+    grad_stats["has_nan"] = has_nan
+    grad_stats["has_inf"] = has_inf
 
     return grad_stats
 
@@ -396,19 +408,16 @@ def main(args):
     lr_decay_iters = 600000  # should be ~= max_iters per Chinchilla
 
     # learning rate decay scheduler (cosine with warmup)
-    def get_lr(iter_num, epoch):
-        # 1) linear warmup for warmup_iters steps
+    def get_lr(iter_num, epoch, args):
+        # More conservative learning rate schedule
+        initial_lr = args.learning_rate * 0.1  # Start with 10x smaller learning rate
+        warmup_iters = 1000  # Increase warmup iterations
+
         it = iter_num + epoch * len(train_dataloader)
         if it < warmup_iters:
-            return args.learning_rate * it / warmup_iters
-        # 2) if it > lr_decay_iters, return min learning rate
-        if it > lr_decay_iters:
-            return min_lr
-        # 3) in between, use cosine decay down to min learning rate
-        decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-        assert 0 <= decay_ratio <= 1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
-        return min_lr + coeff * (args.learning_rate - min_lr)
+            return initial_lr * it / warmup_iters
+
+        return args.learning_rate
 
     optimizer = model.configure_optimizers(
         weight_decay, args.learning_rate, (beta1, beta2), device_type
@@ -477,7 +486,7 @@ def main(args):
                 )
 
             optimizer.zero_grad()
-            lr = get_lr(i, epoch) if decay_lr else args.learning_rate
+            lr = get_lr(i, epoch, args) if decay_lr else args.learning_rate
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 
@@ -485,25 +494,38 @@ def main(args):
             out = model(features.transpose(1, 2))
             batch_loss = loss(out, labels.long()).to(args.device)
 
-            # Prefetch next batch asynchronously while processing the current one
-            next_features = (
-                next_features.to(dtype=torch.bfloat16)
-                .pin_memory()
-                .to(args.device, non_blocking=True)
-            )
-            next_labels = next_labels.pin_memory().to(args.device, non_blocking=True)
+            # Check if loss is valid
+            if torch.isnan(batch_loss) or torch.isinf(batch_loss):
+                print(
+                    f"Warning: Invalid loss value detected: {batch_loss.item()}",
+                    flush=True,
+                    file=logfile,
+                )
+                # Skip this batch
+                features, labels = next_features, next_labels
+                continue
 
-            # Backward pass and optimization
+            # Scale loss if it's too large
+            if batch_loss.item() > 1e5:
+                scale_factor = 1e5 / batch_loss.item()
+                batch_loss = batch_loss * scale_factor
+                print(
+                    f"Warning: Loss scaled down by factor {scale_factor}", flush=True, file=logfile
+                )
+
+            # Normalize loss by accumulation steps
+            batch_loss = batch_loss / args.gradient_accumulation_steps
             batch_loss.backward()
 
-            # Compute gradient statistics
-            grad_stats = compute_gradient_stats(model)
+            if (i + 1) % args.gradient_accumulation_steps == 0:
+                # Compute gradient statistics
+                grad_stats = compute_gradient_stats(model)
 
-            # Gradient clipping
-            if args.max_grad_norm > 0:
+                # Gradient clipping
                 clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
 
-            optimizer.step()
+                optimizer.step()
+                optimizer.zero_grad()
 
             if config.use_nGPT == 1:
                 normalize_matrices(model)
@@ -797,8 +819,22 @@ if __name__ == "__main__":
         "--max-grad-norm",
         type=float,
         action="store",
-        default=1.0,
-        help="maximum gradient norm",
+        default=0.1,  # More conservative default
+        help="maximum gradient norm for clipping",
+    )
+    parser.add_argument(
+        "--initial-lr-scale",
+        type=float,
+        action="store",
+        default=0.1,
+        help="initial learning rate scale factor",
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        action="store",
+        default=4,  # Accumulate gradients over 4 steps
+        help="number of steps to accumulate gradients",
     )
     args = parser.parse_args()
     main(args)
