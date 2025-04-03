@@ -25,7 +25,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
-from torch.nn.utils import clip_grad_norm_
 
 from sklearn.metrics import accuracy_score
 from sklearn import metrics
@@ -264,49 +263,6 @@ def plot_embedding_norms(model, save_path, fig_name="embedding_norms.png"):
     plt.show()
 
 
-def compute_gradient_stats(model):
-    """Compute gradient statistics for model parameters with safety checks"""
-    total_norm = 0.0
-    grad_stats = {"max_grad": 0.0, "min_grad": float("inf"), "mean_grad": 0.0, "total_params": 0}
-
-    param_count = 0
-    grad_values = []
-    has_nan = False
-    has_inf = False
-
-    for p in model.parameters():
-        if p.grad is not None:
-            # Check for NaN and Inf values
-            if torch.isnan(p.grad).any():
-                has_nan = True
-            if torch.isinf(p.grad).any():
-                has_inf = True
-
-            # Replace NaN and Inf values with 0
-            p.grad = torch.nan_to_num(p.grad, nan=0.0, posinf=1e6, neginf=-1e6)
-
-            param_norm = p.grad.detach().data.norm(2)
-            total_norm += param_norm.item() ** 2
-
-            grad_data = p.grad.detach().abs()
-            max_grad = grad_data.max().item()
-            min_grad = grad_data.min().item()
-            mean_grad = grad_data.mean().item()
-
-            grad_stats["max_grad"] = max(grad_stats["max_grad"], max_grad)
-            grad_stats["min_grad"] = min(grad_stats["min_grad"], min_grad)
-            grad_values.append(mean_grad)
-            param_count += p.numel()
-
-    grad_stats["total_norm"] = np.sqrt(total_norm)
-    grad_stats["mean_grad"] = np.mean(grad_values) if grad_values else 0
-    grad_stats["total_params"] = param_count
-    grad_stats["has_nan"] = has_nan
-    grad_stats["has_inf"] = has_inf
-
-    return grad_stats
-
-
 def main(args):
     t0 = time.time()
     # set up results directory
@@ -408,16 +364,19 @@ def main(args):
     lr_decay_iters = 600000  # should be ~= max_iters per Chinchilla
 
     # learning rate decay scheduler (cosine with warmup)
-    def get_lr(iter_num, epoch, args):
-        # More conservative learning rate schedule
-        initial_lr = args.learning_rate * 0.1  # Start with 10x smaller learning rate
-        warmup_iters = 1000  # Increase warmup iterations
-
+    def get_lr(iter_num, epoch):
+        # 1) linear warmup for warmup_iters steps
         it = iter_num + epoch * len(train_dataloader)
         if it < warmup_iters:
-            return initial_lr * it / warmup_iters
-
-        return args.learning_rate
+            return args.learning_rate * it / warmup_iters
+        # 2) if it > lr_decay_iters, return min learning rate
+        if it > lr_decay_iters:
+            return min_lr
+        # 3) in between, use cosine decay down to min learning rate
+        decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+        return min_lr + coeff * (args.learning_rate - min_lr)
 
     optimizer = model.configure_optimizers(
         weight_decay, args.learning_rate, (beta1, beta2), device_type
@@ -469,8 +428,10 @@ def main(args):
         data_iter = iter(train_dataloader)
         # Prefetch the first batch using the same iterator
         features, labels = next(data_iter)
-        features = features.to(device=args.device, dtype=torch.bfloat16)
-        labels = labels.to(device=args.device)
+        features = (
+            features.to(dtype=torch.bfloat16).pin_memory().to(args.device, non_blocking=True)
+        )
+        labels = labels.pin_memory().to(args.device, non_blocking=True)
 
         pbar = tqdm(data_iter, total=len(train_dataloader) - 1, desc="Training")
 
@@ -478,64 +439,40 @@ def main(args):
 
             if i % 50 == 0:
                 check_normalization(model)
-                print(f"Model loaded and checked for {i}th iter")
+                print(f"Model loaded and checked for {epoch}th iter")
                 plot_embedding_norms(
                     model, save_path=out_dir, fig_name=f"embedding_norms {epoch}_{i}.png"
                 )
 
             optimizer.zero_grad()
-            lr = get_lr(i, epoch, args) if decay_lr else args.learning_rate
+            lr = get_lr(i, epoch) if decay_lr else args.learning_rate
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 
             # Process current batch (e.g., B1 then B2, etc.)
-            out = model(features)
-            batch_loss = loss(out, labels.long())
+            out = model(features.transpose(1, 2))
+            batch_loss = loss(out, labels.long()).to(args.device)
 
-            # Check if loss is valid
-            if torch.isnan(batch_loss) or torch.isinf(batch_loss):
-                print(
-                    f"Warning: Invalid loss value detected: {batch_loss.item()}",
-                    flush=True,
-                    file=logfile,
+            if args.max_grad_norm > 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=args.max_grad_norm
                 )
-                # Skip this batch
-                features, labels = next_features, next_labels
-                continue
+                print(f"Gradient norm: {grad_norm}", flush=True, file=logfile)
 
-            # Scale loss if it's too large
-            if batch_loss.item() > 1e5:
-                scale_factor = 1e5 / batch_loss.item()
-                batch_loss = batch_loss * scale_factor
-                print(
-                    f"Warning: Loss scaled down by factor {scale_factor}", flush=True, file=logfile
-                )
+            # Prefetch next batch asynchronously while processing the current one
+            next_features = (
+                next_features.to(dtype=torch.bfloat16)
+                .pin_memory()
+                .to(args.device, non_blocking=True)
+            )
+            next_labels = next_labels.pin_memory().to(args.device, non_blocking=True)
 
-            # Normalize loss by accumulation steps
-            batch_loss = batch_loss / args.gradient_accumulation_steps
+            # Backward pass and optimization
             batch_loss.backward()
-
-            # Compute gradient statistics after backward pass
-            grad_stats = compute_gradient_stats(model)
-
-            if (i + 1) % args.gradient_accumulation_steps == 0:
-                # Gradient clipping
-                clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
-                optimizer.step()
-                optimizer.zero_grad()
+            optimizer.step()
 
             if config.use_nGPT == 1:
                 normalize_matrices(model)
-
-            # Log gradient statistics
-            if i % 100 == 0:  # Log every 100 batches
-                print(f"Gradient stats - Epoch {epoch}, Batch {i}:", flush=True, file=logfile)
-                print(f"  Total norm: {grad_stats['total_norm']:.4f}", flush=True, file=logfile)
-                print(f"  Max grad: {grad_stats['max_grad']:.4f}", flush=True, file=logfile)
-                print(f"  Mean grad: {grad_stats['mean_grad']:.4f}", flush=True, file=logfile)
-                print(f"  Min grad: {grad_stats['min_grad']:.4f}", flush=True, file=logfile)
-                if grad_stats["has_nan"] or grad_stats["has_inf"]:
-                    print("  WARNING: NaN or Inf gradients detected!", flush=True, file=logfile)
 
             # Swap prefetched data into the current batch for the next iteration
             features, labels = next_features, next_labels
@@ -543,29 +480,14 @@ def main(args):
             # Log and update progress bar description
             batch_loss_train = batch_loss.detach().cpu().item()
             losses_e.append(batch_loss_train)
-            pbar.set_description(
-                f"loss: {batch_loss_train:.4f} grad_norm: {grad_stats['total_norm']:.4f}"
-            )
-
-            # Debug prints
-            if i == 0:  # Print only for first batch
-                print(f"Features device: {features.device}", flush=True, file=logfile)
-                print(f"Labels device: {labels.device}", flush=True, file=logfile)
-                print(f"Model device: {next(model.parameters()).device}", flush=True, file=logfile)
+            pbar.set_description(f"loss: {batch_loss_train}")
 
         # Process the final prefetched batch that was not handled in the loop
         if features is not None:
             optimizer.zero_grad()
-            out = model(features)
-            batch_loss = loss(out, labels.long())
+            out = model(features.transpose(1, 2))
+            batch_loss = loss(out, labels.long()).to(args.device)
             batch_loss.backward()
-
-            # Compute gradient statistics
-            grad_stats = compute_gradient_stats(model)
-
-            # Gradient clipping
-            clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
-
             optimizer.step()
 
             # Add normalization after optimizer step
@@ -597,20 +519,27 @@ def main(args):
                 features, labels = None, None
 
             if features is not None:
-                features = features.to(device=device, dtype=torch.bfloat16)
-                labels = labels.to(device=device)
+                # Ensure consistent device usage
+                features = (
+                    features.to(dtype=torch.bfloat16).pin_memory().to(device, non_blocking=True)
+                )
+                labels = labels.pin_memory().to(device, non_blocking=True)
 
             for i, (next_features, next_labels) in enumerate(pbar):
                 # Process current batch
-                out = model(features)
+                out = model(features.transpose(1, 2))
                 batch_loss = loss(out, labels.long()).detach().cpu().item()
                 losses_e_val.append(batch_loss)
                 predicted_e.append(softmax(out).cpu().numpy())
                 correct_e.append(labels.cpu())
 
                 # Prefetch next batch
-                next_features = next_features.to(device=device, dtype=torch.bfloat16)
-                next_labels = next_labels.to(device=device)
+                next_features = (
+                    next_features.to(dtype=torch.bfloat16)
+                    .pin_memory()
+                    .to(device, non_blocking=True)
+                )
+                next_labels = next_labels.pin_memory().to(device, non_blocking=True)
 
                 # Update progress bar
                 pbar.set_description(f"batch val loss: {batch_loss}")
@@ -620,7 +549,7 @@ def main(args):
 
             # Process the final prefetched batch if it exists
             if features is not None:
-                out = model(features)
+                out = model(features.transpose(1, 2))
                 batch_loss = loss(out, labels.long()).detach().cpu().item()
                 losses_e_val.append(batch_loss)
                 predicted_e.append(softmax(out).cpu().numpy())
@@ -824,22 +753,8 @@ if __name__ == "__main__":
         "--max-grad-norm",
         type=float,
         action="store",
-        default=0.1,  # More conservative default
-        help="maximum gradient norm for clipping",
-    )
-    parser.add_argument(
-        "--initial-lr-scale",
-        type=float,
-        action="store",
-        default=0.1,
-        help="initial learning rate scale factor",
-    )
-    parser.add_argument(
-        "--gradient-accumulation-steps",
-        type=int,
-        action="store",
-        default=4,  # Accumulate gradients over 4 steps
-        help="number of steps to accumulate gradients",
+        default=1.0,
+        help="maximum gradient norm",
     )
     args = parser.parse_args()
     main(args)
