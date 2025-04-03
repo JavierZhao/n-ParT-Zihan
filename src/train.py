@@ -469,10 +469,8 @@ def main(args):
         data_iter = iter(train_dataloader)
         # Prefetch the first batch using the same iterator
         features, labels = next(data_iter)
-        features = (
-            features.to(dtype=torch.bfloat16).pin_memory().to(args.device, non_blocking=True)
-        )
-        labels = labels.pin_memory().to(args.device, non_blocking=True)
+        features = features.to(device=args.device, dtype=torch.bfloat16)
+        labels = labels.to(device=args.device)
 
         pbar = tqdm(data_iter, total=len(train_dataloader) - 1, desc="Training")
 
@@ -491,8 +489,8 @@ def main(args):
                 param_group["lr"] = lr
 
             # Process current batch (e.g., B1 then B2, etc.)
-            out = model(features.transpose(1, 2))
-            batch_loss = loss(out, labels.long()).to(args.device)
+            out = model(features)
+            batch_loss = loss(out, labels.long())
 
             # Check if loss is valid
             if torch.isnan(batch_loss) or torch.isinf(batch_loss):
@@ -549,11 +547,17 @@ def main(args):
                 f"loss: {batch_loss_train:.4f} grad_norm: {grad_stats['total_norm']:.4f}"
             )
 
+            # Debug prints
+            if i == 0:  # Print only for first batch
+                print(f"Features device: {features.device}", flush=True, file=logfile)
+                print(f"Labels device: {labels.device}", flush=True, file=logfile)
+                print(f"Model device: {next(model.parameters()).device}", flush=True, file=logfile)
+
         # Process the final prefetched batch that was not handled in the loop
         if features is not None:
             optimizer.zero_grad()
-            out = model(features.transpose(1, 2))
-            batch_loss = loss(out, labels.long()).to(args.device)
+            out = model(features)
+            batch_loss = loss(out, labels.long())
             batch_loss.backward()
 
             # Compute gradient statistics
@@ -593,27 +597,20 @@ def main(args):
                 features, labels = None, None
 
             if features is not None:
-                # Ensure consistent device usage
-                features = (
-                    features.to(dtype=torch.bfloat16).pin_memory().to(device, non_blocking=True)
-                )
-                labels = labels.pin_memory().to(device, non_blocking=True)
+                features = features.to(device=device, dtype=torch.bfloat16)
+                labels = labels.to(device=device)
 
             for i, (next_features, next_labels) in enumerate(pbar):
                 # Process current batch
-                out = model(features.transpose(1, 2))
+                out = model(features)
                 batch_loss = loss(out, labels.long()).detach().cpu().item()
                 losses_e_val.append(batch_loss)
                 predicted_e.append(softmax(out).cpu().numpy())
                 correct_e.append(labels.cpu())
 
                 # Prefetch next batch
-                next_features = (
-                    next_features.to(dtype=torch.bfloat16)
-                    .pin_memory()
-                    .to(device, non_blocking=True)
-                )
-                next_labels = next_labels.pin_memory().to(device, non_blocking=True)
+                next_features = next_features.to(device=device, dtype=torch.bfloat16)
+                next_labels = next_labels.to(device=device)
 
                 # Update progress bar
                 pbar.set_description(f"batch val loss: {batch_loss}")
@@ -623,7 +620,7 @@ def main(args):
 
             # Process the final prefetched batch if it exists
             if features is not None:
-                out = model(features.transpose(1, 2))
+                out = model(features)
                 batch_loss = loss(out, labels.long()).detach().cpu().item()
                 losses_e_val.append(batch_loss)
                 predicted_e.append(softmax(out).cpu().numpy())
