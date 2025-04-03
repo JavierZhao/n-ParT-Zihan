@@ -25,6 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.optim as optim
+from torch.nn.utils import clip_grad_norm_
 
 from sklearn.metrics import accuracy_score
 from sklearn import metrics
@@ -117,12 +118,16 @@ def normalize_matrices(model):
             block.qkv.weight.data.copy_(ModelUtils.justnorm(block.qkv.weight.data, 1))
 
             # Attention output projection
-            block.att_c_proj.weight.data.copy_(ModelUtils.justnorm(block.att_c_proj.weight.data, 1))
+            block.att_c_proj.weight.data.copy_(
+                ModelUtils.justnorm(block.att_c_proj.weight.data, 1)
+            )
 
             # MLP layers
             block.c_fc.weight.data.copy_(ModelUtils.justnorm(block.c_fc.weight.data, 1))
 
-            block.mlp_c_proj.weight.data.copy_(ModelUtils.justnorm(block.mlp_c_proj.weight.data, 1))
+            block.mlp_c_proj.weight.data.copy_(
+                ModelUtils.justnorm(block.mlp_c_proj.weight.data, 1)
+            )
 
         # Normalize projector layers
         for layer in model.projector.layers:
@@ -137,7 +142,6 @@ def normalize_matrices(model):
         raise
 
 
-
 def compute_weighted_norms(model):
 
     norms = {}
@@ -146,24 +150,32 @@ def compute_weighted_norms(model):
     input_embeds = model.encoder.input_proj.weight.data
     input_norms = torch.norm(input_embeds.float(), p=2, dim=1).detach().cpu().numpy()
     norms["input_embeddings"] = np.sort(input_norms)[::-1]
-    
+
     # Compute norms for transformer encoder blocks
     block_norms = []
 
     for block in model.encoder.blocks:
         # Compute norms along the last dimension (-1), as per justnorm
         qkv_norm = torch.norm(block.qkv.weight.float(), p=2, dim=1).detach().cpu().numpy()
-        att_c_proj_norm = torch.norm(block.att_c_proj.weight.float(), p=2, dim=1).detach().cpu().numpy()
+        att_c_proj_norm = (
+            torch.norm(block.att_c_proj.weight.float(), p=2, dim=1).detach().cpu().numpy()
+        )
         c_fc_norm = torch.norm(block.c_fc.weight.float(), p=2, dim=1).detach().cpu().numpy()
-        mlp_c_proj_norm = torch.norm(block.mlp_c_proj.weight.float(), p=2, dim=1).detach().cpu().numpy()
+        mlp_c_proj_norm = (
+            torch.norm(block.mlp_c_proj.weight.float(), p=2, dim=1).detach().cpu().numpy()
+        )
 
         # Store the mean norm per layer
-        block_norms.append(np.mean([
-            np.mean(qkv_norm),
-            np.mean(att_c_proj_norm),
-            np.mean(c_fc_norm),
-            np.mean(mlp_c_proj_norm)
-        ]))
+        block_norms.append(
+            np.mean(
+                [
+                    np.mean(qkv_norm),
+                    np.mean(att_c_proj_norm),
+                    np.mean(c_fc_norm),
+                    np.mean(mlp_c_proj_norm),
+                ]
+            )
+        )
 
     norms["encoder_blocks"] = np.array(block_norms)
 
@@ -201,21 +213,19 @@ def check_normalization(model, tolerance=1e-2):
         issues.append("Input Embeddings")
 
     if issues:
-        print(f"WARNING: The following components are NOT properly normalized: {', '.join(issues)}")
+        print(
+            f"WARNING: The following components are NOT properly normalized: {', '.join(issues)}"
+        )
     else:
         print("All checked model weights are properly normalized.")
-
-
 
 
 def plot_embedding_norms(model, save_path, fig_name="embedding_norms.png"):
 
     plt.figure(figsize=(8, 6))
 
-    
     norms = compute_weighted_norms(model)
 
-        
     input_norms = np.sort(norms["input_embeddings"])[::-1]  # Sorted in descending order
     encoder_norms = np.sort(norms["encoder_blocks"])[::-1]  # Sorted
     projector_norms = np.sort(norms["projector_layers"])[::-1]  # Sorted
@@ -226,12 +236,16 @@ def plot_embedding_norms(model, save_path, fig_name="embedding_norms.png"):
     projector_rank = np.linspace(0, 1, len(projector_norms))
 
     # Plot norms
-    plt.plot(input_rank, input_norms, label=f"Input Embedding", linestyle="-", marker="o", alpha=0.7)
+    plt.plot(
+        input_rank, input_norms, label=f"Input Embedding", linestyle="-", marker="o", alpha=0.7
+    )
     plt.plot(encoder_rank, encoder_norms, label=f"Encoder ", linestyle="--", marker="s", alpha=0.7)
-    plt.plot(projector_rank, projector_norms, label=f"Projector ", linestyle="-.", marker="D", alpha=0.7)
+    plt.plot(
+        projector_rank, projector_norms, label=f"Projector ", linestyle="-.", marker="D", alpha=0.7
+    )
 
     # Add reference line for expected norm (1.0)
-    plt.axhline(y=1.0, color='black', linestyle='-', linewidth=1, label="Expected Norm")
+    plt.axhline(y=1.0, color="black", linestyle="-", linewidth=1, label="Expected Norm")
 
     # Labels and title
     plt.xlabel("Normalized Rank")
@@ -243,12 +257,42 @@ def plot_embedding_norms(model, save_path, fig_name="embedding_norms.png"):
     plt.ylim(0.5, 1.5)
 
     fig_path = os.path.join(save_path, fig_name)
-    plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
     print(f"Figure saved at: {save_path}")
 
     # Show the plot
     plt.show()
 
+
+def compute_gradient_stats(model):
+    """Compute gradient statistics for model parameters"""
+    total_norm = 0.0
+    grad_stats = {"max_grad": 0.0, "min_grad": float("inf"), "mean_grad": 0.0, "total_params": 0}
+
+    param_count = 0
+    grad_values = []
+
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.detach().data.norm(2)
+            total_norm += param_norm.item() ** 2
+
+            # Get gradient statistics
+            grad_data = p.grad.detach().abs()
+            max_grad = grad_data.max().item()
+            min_grad = grad_data.min().item()
+            mean_grad = grad_data.mean().item()
+
+            grad_stats["max_grad"] = max(grad_stats["max_grad"], max_grad)
+            grad_stats["min_grad"] = min(grad_stats["min_grad"], min_grad)
+            grad_values.append(mean_grad)
+            param_count += p.numel()
+
+    grad_stats["total_norm"] = np.sqrt(total_norm)
+    grad_stats["mean_grad"] = np.mean(grad_values) if grad_values else 0
+    grad_stats["total_params"] = param_count
+
+    return grad_stats
 
 
 def main(args):
@@ -401,7 +445,7 @@ def main(args):
         print("Model loaded and checked. Ready for training!")
 
         plot_embedding_norms(model, save_path=out_dir)
-        
+
         # initialise timing stats
         te_start = time.time()
         te0 = time.time()
@@ -420,23 +464,25 @@ def main(args):
             features.to(dtype=torch.bfloat16).pin_memory().to(args.device, non_blocking=True)
         )
         labels = labels.pin_memory().to(args.device, non_blocking=True)
-        
-        pbar = tqdm(data_iter, total=len(train_dataloader)-1, desc="Training")
+
+        pbar = tqdm(data_iter, total=len(train_dataloader) - 1, desc="Training")
 
         for i, (next_features, next_labels) in enumerate(pbar):
 
             if i % 50 == 0:
                 check_normalization(model)
-                print(f"Model loaded and checked for {epoch}th iter")
-                plot_embedding_norms(model, save_path=out_dir, fig_name = f"embedding_norms {epoch}_{i}.png")
-            
+                print(f"Model loaded and checked for {i}th iter")
+                plot_embedding_norms(
+                    model, save_path=out_dir, fig_name=f"embedding_norms {epoch}_{i}.png"
+                )
+
             optimizer.zero_grad()
             lr = get_lr(i, epoch) if decay_lr else args.learning_rate
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 
             # Process current batch (e.g., B1 then B2, etc.)
-            out = model(features.transpose(1,2))
+            out = model(features.transpose(1, 2))
             batch_loss = loss(out, labels.long()).to(args.device)
 
             # Prefetch next batch asynchronously while processing the current one
@@ -449,10 +495,26 @@ def main(args):
 
             # Backward pass and optimization
             batch_loss.backward()
+
+            # Compute gradient statistics
+            grad_stats = compute_gradient_stats(model)
+
+            # Gradient clipping
+            if args.max_grad_norm > 0:
+                clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
+
             optimizer.step()
 
             if config.use_nGPT == 1:
                 normalize_matrices(model)
+
+            # Log gradient statistics
+            if i % 100 == 0:  # Log every 100 batches
+                print(f"Gradient stats - Epoch {epoch}, Batch {i}:", flush=True, file=logfile)
+                print(f"  Total norm: {grad_stats['total_norm']:.4f}", flush=True, file=logfile)
+                print(f"  Max grad: {grad_stats['max_grad']:.4f}", flush=True, file=logfile)
+                print(f"  Mean grad: {grad_stats['mean_grad']:.4f}", flush=True, file=logfile)
+                print(f"  Min grad: {grad_stats['min_grad']:.4f}", flush=True, file=logfile)
 
             # Swap prefetched data into the current batch for the next iteration
             features, labels = next_features, next_labels
@@ -460,12 +522,14 @@ def main(args):
             # Log and update progress bar description
             batch_loss_train = batch_loss.detach().cpu().item()
             losses_e.append(batch_loss_train)
-            pbar.set_description(f"loss: {batch_loss_train}")
+            pbar.set_description(
+                f"loss: {batch_loss_train:.4f} grad_norm: {grad_stats['total_norm']:.4f}"
+            )
 
         # Process the final prefetched batch that was not handled in the loop
         if features is not None:
             optimizer.zero_grad()
-            out = model(features.transpose(1,2))
+            out = model(features.transpose(1, 2))
             batch_loss = loss(out, labels.long()).to(args.device)
             batch_loss.backward()
             optimizer.step()
@@ -507,7 +571,7 @@ def main(args):
 
             for i, (next_features, next_labels) in enumerate(pbar):
                 # Process current batch
-                out = model(features.transpose(1,2))
+                out = model(features.transpose(1, 2))
                 batch_loss = loss(out, labels.long()).detach().cpu().item()
                 losses_e_val.append(batch_loss)
                 predicted_e.append(softmax(out).cpu().numpy())
@@ -529,7 +593,7 @@ def main(args):
 
             # Process the final prefetched batch if it exists
             if features is not None:
-                out = model(features.transpose(1,2))
+                out = model(features.transpose(1, 2))
                 batch_loss = loss(out, labels.long()).detach().cpu().item()
                 losses_e_val.append(batch_loss)
                 predicted_e.append(softmax(out).cpu().numpy())
@@ -728,6 +792,13 @@ if __name__ == "__main__":
         action="store",
         default=1,
         help="whether to use normalized transformer",
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        action="store",
+        default=1.0,
+        help="maximum gradient norm",
     )
     args = parser.parse_args()
     main(args)
