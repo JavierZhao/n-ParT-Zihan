@@ -517,13 +517,12 @@ def main(args):
             batch_loss = batch_loss / args.gradient_accumulation_steps
             batch_loss.backward()
 
-            if (i + 1) % args.gradient_accumulation_steps == 0:
-                # Compute gradient statistics
-                grad_stats = compute_gradient_stats(model)
+            # Compute gradient statistics after backward pass
+            grad_stats = compute_gradient_stats(model)
 
+            if (i + 1) % args.gradient_accumulation_steps == 0:
                 # Gradient clipping
                 clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
-
                 optimizer.step()
                 optimizer.zero_grad()
 
@@ -537,6 +536,8 @@ def main(args):
                 print(f"  Max grad: {grad_stats['max_grad']:.4f}", flush=True, file=logfile)
                 print(f"  Mean grad: {grad_stats['mean_grad']:.4f}", flush=True, file=logfile)
                 print(f"  Min grad: {grad_stats['min_grad']:.4f}", flush=True, file=logfile)
+                if grad_stats["has_nan"] or grad_stats["has_inf"]:
+                    print("  WARNING: NaN or Inf gradients detected!", flush=True, file=logfile)
 
             # Swap prefetched data into the current batch for the next iteration
             features, labels = next_features, next_labels
@@ -554,6 +555,13 @@ def main(args):
             out = model(features.transpose(1, 2))
             batch_loss = loss(out, labels.long()).to(args.device)
             batch_loss.backward()
+
+            # Compute gradient statistics
+            grad_stats = compute_gradient_stats(model)
+
+            # Gradient clipping
+            clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
+
             optimizer.step()
 
             # Add normalization after optimizer step
