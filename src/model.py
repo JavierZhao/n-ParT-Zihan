@@ -223,7 +223,7 @@ class RMSNorm(torch.nn.Module):
 
 class ModelUtils:
     @staticmethod
-    def justnorm(x, idim=-1, eps=1e-6):
+    def justnorm(x, idim=-1, eps=1e-5):
         dtype = x.dtype
         x = x.float()
         norm = x.norm(p=2, dim=idim, keepdim=True)

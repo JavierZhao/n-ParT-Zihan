@@ -428,9 +428,7 @@ def main(args):
         data_iter = iter(train_dataloader)
         # Prefetch the first batch using the same iterator
         features, labels = next(data_iter)
-        features = (
-            features.to(dtype=torch.bfloat16).pin_memory().to(args.device, non_blocking=True)
-        )
+        features = features.to(dtype=torch.float32).pin_memory().to(args.device, non_blocking=True)
         labels = labels.pin_memory().to(args.device, non_blocking=True)
 
         pbar = tqdm(data_iter, total=len(train_dataloader) - 1, desc="Training")
@@ -455,7 +453,7 @@ def main(args):
 
             # Prefetch next batch asynchronously while processing the current one
             next_features = (
-                next_features.to(dtype=torch.bfloat16)
+                next_features.to(dtype=torch.float32)
                 .pin_memory()
                 .to(args.device, non_blocking=True)
             )
@@ -520,7 +518,7 @@ def main(args):
             if features is not None:
                 # Ensure consistent device usage
                 features = (
-                    features.to(dtype=torch.bfloat16).pin_memory().to(device, non_blocking=True)
+                    features.to(dtype=torch.float32).pin_memory().to(device, non_blocking=True)
                 )
                 labels = labels.pin_memory().to(device, non_blocking=True)
 
@@ -534,7 +532,7 @@ def main(args):
 
                 # Prefetch next batch
                 next_features = (
-                    next_features.to(dtype=torch.bfloat16)
+                    next_features.to(dtype=torch.float32)
                     .pin_memory()
                     .to(device, non_blocking=True)
                 )
