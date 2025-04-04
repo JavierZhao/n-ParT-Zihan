@@ -453,12 +453,6 @@ def main(args):
             out = model(features.transpose(1, 2))
             batch_loss = loss(out, labels.long()).to(args.device)
 
-            if args.max_grad_norm > 0:
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), max_norm=args.max_grad_norm
-                )
-                print(f"Gradient norm: {grad_norm}", flush=True, file=logfile)
-
             # Prefetch next batch asynchronously while processing the current one
             next_features = (
                 next_features.to(dtype=torch.bfloat16)
@@ -469,6 +463,11 @@ def main(args):
 
             # Backward pass and optimization
             batch_loss.backward()
+            if args.max_grad_norm > 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=args.max_grad_norm
+                )
+                print(f"Gradient norm: {grad_norm}", flush=True, file=logfile)
             optimizer.step()
 
             if config.use_nGPT == 1:
