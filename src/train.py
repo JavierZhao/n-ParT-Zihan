@@ -269,7 +269,7 @@ def main(args):
     config = GPTConfig()
     config.use_nGPT = args.use_nGPT
     out_dir = args.out_dir
-    args.learning_rate = 1e-4 * args.batch_size / 128
+    args.learning_rate = 1e-6 * args.batch_size / 128
     args.output_dim = config.output_dim
 
     # check if experiment already exists and is not empty
