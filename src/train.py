@@ -448,7 +448,7 @@ def main(args):
             norm_features = torch.norm(next_features, p=2, dim=2, keepdim=True)
             next_features = next_features / (norm_features + epsilon)
 
-            if i % 50 == 0:
+            if i % 50 == 0 and args.use_nGPT == 1:
                 check_normalization(model)
                 print(f"Model loaded and checked for {epoch}th iter")
                 plot_embedding_norms(model, save_path=out_dir, fig_name=f"embedding_norms.png")
