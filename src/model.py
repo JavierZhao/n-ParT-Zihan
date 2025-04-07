@@ -135,6 +135,8 @@ class Block(nn.Module):
         y = y.to(dtype=torch.float32)
         if torch.isnan(y).any():
             print(f"y is nan, {y}")
+            # save y to file
+            torch.save(y, "y.pt")
             print(f"input h: {hin}")
             print(f"mask: {mask}")
         h_att = self.att_c_proj(y)
@@ -148,6 +150,9 @@ class Block(nn.Module):
             A_norm = ModelUtils.justnorm(h)
             if torch.isnan(h_att).any():
                 print(f"h_att is nan, {h_att}")
+                # save h_att to file
+                torch.save(h_att, "h_att.pt")
+                print(f"input h contains nan: {torch.isnan(h).any()}")
                 print(f"input h: {h}")
                 print(f"mask: {mask}")
             B_norm = ModelUtils.justnorm(h_att)
