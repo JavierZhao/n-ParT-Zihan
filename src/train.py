@@ -409,7 +409,8 @@ def main(args):
     acc_val_all = []
 
     if config.use_nGPT == 1:
-        normalize_matrices(model)
+        with torch.no_grad():
+            normalize_matrices(model)
 
     for epoch in range(epoch_start, args.n_epochs):
         # !!!!!!!
@@ -479,7 +480,8 @@ def main(args):
             optimizer.step()
 
             if config.use_nGPT == 1:
-                normalize_matrices(model)
+                with torch.no_grad():
+                    normalize_matrices(model)
 
             # Swap prefetched data into the current batch for the next iteration
             features, labels = next_features, next_labels
@@ -499,7 +501,8 @@ def main(args):
 
             # Add normalization after optimizer step
             if config.use_nGPT == 1:
-                normalize_matrices(model)
+                with torch.no_grad():
+                    normalize_matrices(model)
 
             batch_loss_train = batch_loss.detach().cpu().item()
             losses_e.append(batch_loss_train)
