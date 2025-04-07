@@ -133,6 +133,10 @@ class Block(nn.Module):
         y = y.contiguous().view(B, T, self.config.n_embd)
 
         y = y.to(dtype=torch.float32)
+        if torch.isnan(y).any():
+            print(f"y is nan, {y}")
+            print(f"input h: {hin}")
+            print(f"mask: {mask}")
         h_att = self.att_c_proj(y)
 
         if self.config.use_nGPT == 0:
@@ -142,6 +146,10 @@ class Block(nn.Module):
             lr = torch.abs(lr)
 
             A_norm = ModelUtils.justnorm(h)
+            if torch.isnan(h_att).any():
+                print(f"h_att is nan, {h_att}")
+                print(f"input h: {h}")
+                print(f"mask: {mask}")
             B_norm = ModelUtils.justnorm(h_att)
 
             # res = (1.0 - lr) * A_norm + lr * B_norm

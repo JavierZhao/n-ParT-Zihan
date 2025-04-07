@@ -259,10 +259,8 @@ def plot_embedding_norms(model, save_path, fig_name="embedding_norms.png"):
 
     fig_path = os.path.join(save_path, fig_name)
     plt.savefig(fig_path, dpi=300, bbox_inches="tight")
-    print(f"Figure saved at: {save_path}")
-
-    # Show the plot
-    plt.show()
+    # print(f"Figure saved at: {save_path}")
+    plt.close()
 
 
 def main(args):
@@ -440,9 +438,7 @@ def main(args):
             if i % 50 == 0:
                 check_normalization(model)
                 print(f"Model loaded and checked for {epoch}th iter")
-                plot_embedding_norms(
-                    model, save_path=out_dir, fig_name=f"embedding_norms {epoch}_{i}.png"
-                )
+                plot_embedding_norms(model, save_path=out_dir, fig_name=f"embedding_norms.png")
 
             optimizer.zero_grad()
             lr = get_lr(i, epoch) if decay_lr else args.learning_rate
