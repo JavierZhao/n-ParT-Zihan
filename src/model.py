@@ -142,7 +142,7 @@ class Block(nn.Module):
         h_att = self.att_c_proj(y)
 
         if self.config.use_nGPT == 0:
-            h = h + h_att
+            h = h_att
         if self.config.use_nGPT == 1:
             lr = self.attn_alpha * (self.attn_alpha_init_value / self.attn_alpha_init_scaling)
             lr = torch.abs(lr)
