@@ -135,11 +135,10 @@ class Block(nn.Module):
 
         y = y.to(dtype=torch.float32)
         if torch.isnan(y).any():
-            print(f"y is nan, {y}")
-            # save y to file
             torch.save(y, f"{out_dir}/y.pt")
-            print(f"input h: {hin}")
-            print(f"mask: {mask}")
+            torch.save(hin, f"{out_dir}/hin.pt")
+            torch.save(mask, f"{out_dir}/mask.pt")
+            print(f"y is nan, {torch.where(torch.isnan(y))}")
         h_att = self.att_c_proj(y)
 
         if self.config.use_nGPT == 0:
@@ -150,12 +149,10 @@ class Block(nn.Module):
 
             A_norm = ModelUtils.justnorm(h)
             if torch.isnan(h_att).any():
-                print(f"h_att is nan, {h_att}")
+                print(f"h_att is nan, {torch.where(torch.isnan(h_att))}")
                 # save h_att to file
                 torch.save(h_att, f"{out_dir}/h_att.pt")
                 print(f"input h contains nan: {torch.isnan(h).any()}")
-                print(f"input h: {h}")
-                print(f"mask: {mask}")
             B_norm = ModelUtils.justnorm(h_att)
 
             # res = (1.0 - lr) * A_norm + lr * B_norm
