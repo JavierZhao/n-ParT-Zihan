@@ -40,6 +40,8 @@ import copy
 # set the number of threads that pytorch will use
 torch.set_num_threads(2)
 
+torch.autograd.set_detect_anomaly(True)
+
 
 def load_data(args, dataset_path):
     num_jets = 100 * 1000 if args.small else None

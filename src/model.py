@@ -25,19 +25,19 @@ class Block(nn.Module):
 
         # Combined QKV projection
         self.qkv = nn.Linear(
-            config.n_embd, 3 * config.n_embd, bias=config.bias, dtype=torch.bfloat16
+            config.n_embd, 3 * config.n_embd, bias=config.bias, dtype=torch.float32
         )
         self.attention = ScaledDotProductAttention()
         self.att_c_proj = nn.Linear(
-            config.n_embd, config.n_embd, bias=config.bias, dtype=torch.bfloat16
+            config.n_embd, config.n_embd, bias=config.bias, dtype=torch.float32
         )
 
         self.c_fc = nn.Linear(
-            config.n_embd, 2 * 4 * config.n_embd, bias=config.bias, dtype=torch.bfloat16
+            config.n_embd, 2 * 4 * config.n_embd, bias=config.bias, dtype=torch.float32
         )
         self.silu = nn.SiLU()
         self.mlp_c_proj = nn.Linear(
-            4 * config.n_embd, config.n_embd, bias=config.bias, dtype=torch.bfloat16
+            4 * config.n_embd, config.n_embd, bias=config.bias, dtype=torch.float32
         )
 
         # Rest of the initialization code remains the same
@@ -76,7 +76,7 @@ class Block(nn.Module):
             raise ValueError(f"Expected embedding dim {self.config.n_embd}, got {C}")
 
         # Cast input to desired dtype at the start
-        h = h.to(dtype=torch.bfloat16)
+        h = h.to(dtype=torch.float32)
 
         hin = h
         if self.config.use_nGPT == 0:
@@ -111,18 +111,18 @@ class Block(nn.Module):
 
         # Use PyTorch 2.0's native flash attention when available
         # y = F.scaled_dot_product_attention(
-        #     q.to(dtype=torch.bfloat16),
-        #     k.to(dtype=torch.bfloat16),
-        #     v.to(dtype=torch.bfloat16),
+        #     q.to(dtype=torch.float32),
+        #     k.to(dtype=torch.float32),
+        #     v.to(dtype=torch.float32),
         #     attn_mask=mask,
         #     dropout_p=0.0,
         #     is_causal=False,
         #     scale=softmax_scale,
         # )
         y = self.attention(
-            q.to(dtype=torch.bfloat16),
-            k.to(dtype=torch.bfloat16),
-            v.to(dtype=torch.bfloat16),
+            q.to(dtype=torch.float32),
+            k.to(dtype=torch.float32),
+            v.to(dtype=torch.float32),
             attn_mask=mask,
             dropout_p=0.0,
             is_causal=False,
@@ -132,7 +132,7 @@ class Block(nn.Module):
         y = y.transpose(2, 1)
         y = y.contiguous().view(B, T, self.config.n_embd)
 
-        y = y.to(dtype=torch.bfloat16)
+        y = y.to(dtype=torch.float32)
         h_att = self.att_c_proj(y)
 
         if self.config.use_nGPT == 0:
@@ -148,7 +148,7 @@ class Block(nn.Module):
             res = A_norm + lr * (B_norm - A_norm)
             h = ModelUtils.justnorm(res)
 
-        hin = h.to(dtype=torch.bfloat16)
+        hin = h.to(dtype=torch.float32)
         if self.config.use_nGPT == 0:
             hin = self.rmsnorm_mlp(h)
         uv = self.c_fc(hin)
@@ -158,7 +158,7 @@ class Block(nn.Module):
             )
             uv = suv * uv
         u, v = torch.chunk(uv, 2, dim=-1)
-        x_mlp = (u * self.silu(v)).to(dtype=torch.bfloat16)
+        x_mlp = (u * self.silu(v)).to(dtype=torch.float32)
         h_mlp = self.mlp_c_proj(x_mlp)
 
         if self.config.use_nGPT == 0:
@@ -174,7 +174,7 @@ class Block(nn.Module):
             res = A_norm + lr * (B_norm - A_norm)
             h = ModelUtils.justnorm(res)
 
-        return h.to(dtype=torch.bfloat16)
+        return h.to(dtype=torch.float32)
 
 
 @dataclass
@@ -262,7 +262,7 @@ class Encoder(nn.Module):
 
         # Input projection parameters
         self.input_proj = nn.Linear(
-            config.input_dim, config.n_embd, bias=config.bias, dtype=torch.bfloat16
+            config.input_dim, config.n_embd, bias=config.bias, dtype=torch.float32
         )
 
         if config.use_nGPT == 0:
@@ -329,7 +329,7 @@ class Encoder(nn.Module):
             if hasattr(self, "rmsnorm_input"):
                 x = self.rmsnorm_input(x)
         else:
-            x = self.input_proj(x.to(dtype=torch.bfloat16))
+            x = self.input_proj(x.to(dtype=torch.float32))
 
         for block in self.blocks:
             x = block(x, attention_mask)
@@ -388,10 +388,10 @@ class Projector(nn.Module):
                 {
                     # Project to 2x dimension for UV gating
                     "linear": nn.Linear(
-                        dims[i], 2 * dims[i + 1], bias=config.bias, dtype=torch.bfloat16
+                        dims[i], 2 * dims[i + 1], bias=config.bias, dtype=torch.float32
                     ),
                     "proj": nn.Linear(
-                        dims[i + 1], dims[i + 1], bias=config.bias, dtype=torch.bfloat16
+                        dims[i + 1], dims[i + 1], bias=config.bias, dtype=torch.float32
                     ),
                 }
             )
@@ -417,7 +417,7 @@ class Projector(nn.Module):
             if self.config.use_nGPT == 0:
                 hin = self.rmsnorm_layers[i](h)
             else:
-                hin = h.to(dtype=torch.bfloat16)
+                hin = h.to(dtype=torch.float32)
 
             # UV gating
             uv = layer["linear"](hin)
@@ -430,7 +430,7 @@ class Projector(nn.Module):
 
             u, v = torch.chunk(uv, 2, dim=-1)
             x = u * self.silu(v)
-            h = layer["proj"](x.to(dtype=torch.bfloat16))
+            h = layer["proj"](x.to(dtype=torch.float32))
 
         return h
 
