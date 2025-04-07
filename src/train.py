@@ -458,7 +458,7 @@ def main(args):
                 param_group["lr"] = lr
 
             # Process current batch (e.g., B1 then B2, etc.)
-            out = model(features.transpose(1, 2))
+            out = model(features.transpose(1, 2), out_dir)
             batch_loss = loss(out, labels.long()).to(args.device)
 
             # Prefetch next batch asynchronously while processing the current one

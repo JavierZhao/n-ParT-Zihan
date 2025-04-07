@@ -70,7 +70,7 @@ class Block(nn.Module):
                 self.suv_init_scaling * torch.ones(2 * 4 * config.n_embd, dtype=torch.float32)
             )
 
-    def forward(self, h, mask=None):
+    def forward(self, h, mask=None, out_dir=None):
         B, T, C = h.size()
         if C != self.config.n_embd:
             raise ValueError(f"Expected embedding dim {self.config.n_embd}, got {C}")
@@ -136,7 +136,7 @@ class Block(nn.Module):
         if torch.isnan(y).any():
             print(f"y is nan, {y}")
             # save y to file
-            torch.save(y, "y.pt")
+            torch.save(y, f"{out_dir}/y.pt")
             print(f"input h: {hin}")
             print(f"mask: {mask}")
         h_att = self.att_c_proj(y)
@@ -151,7 +151,7 @@ class Block(nn.Module):
             if torch.isnan(h_att).any():
                 print(f"h_att is nan, {h_att}")
                 # save h_att to file
-                torch.save(h_att, "h_att.pt")
+                torch.save(h_att, f"{out_dir}/h_att.pt")
                 print(f"input h contains nan: {torch.isnan(h).any()}")
                 print(f"input h: {h}")
                 print(f"mask: {mask}")
@@ -324,7 +324,7 @@ class Encoder(nn.Module):
         mask = mask.unsqueeze(1)  # [B, 1, T, T]
         return mask
 
-    def forward(self, inpt):
+    def forward(self, inpt, out_dir=None):
         x = inpt + 0.0
         if x.dim() != 3:
             raise ValueError(f"Expected 3D input (batch, particles, features), got {x.dim()}D")
@@ -345,7 +345,7 @@ class Encoder(nn.Module):
             x = self.input_proj(x.to(dtype=torch.float32))
 
         for block in self.blocks:
-            x = block(x, attention_mask)
+            x = block(x, attention_mask, out_dir)
         return x
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -464,9 +464,9 @@ class Classifier(nn.Module):
 
         print("number of parameters: %.2fM" % (ModelUtils.get_num_params(self) / 1e6,))
 
-    def forward(self, idx):
+    def forward(self, idx, out_dir=None):
         # Get embeddings from encoder
-        encoder_output = self.encoder(idx)
+        encoder_output = self.encoder(idx, out_dir)
 
         encoder_output = encoder_output.sum(
             dim=1
