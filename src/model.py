@@ -2,6 +2,7 @@ import math
 import inspect
 from dataclasses import dataclass
 
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -42,8 +43,8 @@ class Block(nn.Module):
 
         # Rest of the initialization code remains the same
         if config.use_nGPT == 0:
-            self.rmsnorm_att = RMSNorm(config.n_embd)
-            self.rmsnorm_mlp = RMSNorm(config.n_embd)
+            self.rmsnorm_att = LayerNorm(config.n_embd)
+            self.rmsnorm_mlp = LayerNorm(config.n_embd)
 
         if config.use_nGPT == 1:
             self.attn_alpha_init_value = 0.05
@@ -214,6 +215,26 @@ class GPTConfig:
             raise ValueError("n_head cannot be larger than n_embd")
 
 
+class LayerNorm(torch.nn.Module):
+    def __init__(self, embdim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.layer_norm = nn.LayerNorm(embdim, eps=eps)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Check for NaN values in input
+        if torch.isnan(x).any():
+            raise ValueError("NaN values detected in LayerNorm input")
+
+        # Apply PyTorch's LayerNorm
+        xnorm = self.layer_norm(x)
+
+        # Check for NaN values in result
+        if torch.isnan(xnorm).any():
+            raise ValueError("NaN values detected in LayerNorm result")
+
+        return xnorm
+
+
 class RMSNorm(torch.nn.Module):
     def __init__(self, embdim: int, eps: float = 1e-6) -> None:
         super().__init__()
@@ -279,7 +300,7 @@ class Encoder(nn.Module):
         )
 
         if config.use_nGPT == 0:
-            self.rmsnorm_input = RMSNorm(config.n_embd)
+            self.rmsnorm_input = LayerNorm(config.n_embd)
         else:
             input_alpha_init_value = 0.05
             input_alpha_init_scaling = config.base_scale
@@ -311,7 +332,7 @@ class Encoder(nn.Module):
             )
 
         if config.use_nGPT == 0:
-            self.rmsnorm_f = RMSNorm(config.n_embd)
+            self.rmsnorm_f = LayerNorm(config.n_embd)
 
     def get_num_params(self):
         return ModelUtils.get_num_params(self)
@@ -421,7 +442,7 @@ class Projector(nn.Module):
             self.layers.append(layer)
 
         if config.use_nGPT == 0:
-            self.rmsnorm_layers = nn.ModuleList([RMSNorm(dims[i]) for i in range(len(dims) - 1)])
+            self.rmsnorm_layers = nn.ModuleList([LayerNorm(dims[i]) for i in range(len(dims) - 1)])
 
         self.silu = nn.SiLU()
 
