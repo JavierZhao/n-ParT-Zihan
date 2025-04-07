@@ -308,6 +308,10 @@ def main(args):
     else:
         print("loading from checkpoint", file=logfile, flush=True)
     print(f"batch size: {args.batch_size}", file=logfile, flush=True)
+    print(f"learning rate: {args.learning_rate}", file=logfile, flush=True)
+    print(f"max grad norm: {args.max_grad_norm}", file=logfile, flush=True)
+    print(f"use nGPT: {args.use_nGPT}", file=logfile, flush=True)
+    print(f"decay lr: {args.decay_lr}", file=logfile, flush=True)
 
     print("loading data")
     train_dataloader = load_data(args, args.train_dataset_path)
@@ -428,12 +432,20 @@ def main(args):
         data_iter = iter(train_dataloader)
         # Prefetch the first batch using the same iterator
         features, labels = next(data_iter)
+        # normalize the features (batch_size, 7, 50)
+        epsilon = 1e-8
+        norm_features = torch.norm(features, p=2, dim=2, keepdim=True)
+        features = features / (norm_features + epsilon)
         features = features.to(dtype=torch.float32).pin_memory().to(args.device, non_blocking=True)
         labels = labels.pin_memory().to(args.device, non_blocking=True)
 
         pbar = tqdm(data_iter, total=len(train_dataloader) - 1, desc="Training")
 
         for i, (next_features, next_labels) in enumerate(pbar):
+            # normalize the features (batch_size, 7, 50)
+            epsilon = 1e-8
+            norm_features = torch.norm(next_features, p=2, dim=2, keepdim=True)
+            next_features = next_features / (norm_features + epsilon)
 
             if i % 50 == 0:
                 check_normalization(model)
@@ -748,7 +760,7 @@ if __name__ == "__main__":
         "--max-grad-norm",
         type=float,
         action="store",
-        default=1.0,
+        default=1e-2,
         help="maximum gradient norm",
     )
     args = parser.parse_args()
