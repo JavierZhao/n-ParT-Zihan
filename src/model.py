@@ -134,11 +134,17 @@ class Block(nn.Module):
         y = y.contiguous().view(B, T, self.config.n_embd)
 
         y = y.to(dtype=torch.float32)
-        if torch.isnan(y).any():
+        # Compute a boolean mask that is True for jets that contain any NaN.
+        problematic_jets = torch.isnan(y).any(dim=(1, 2))
+        if problematic_jets.any():
+            # Optionally save debugging information.
             torch.save(y, f"{out_dir}/y.pt")
             torch.save(hin, f"{out_dir}/hin.pt")
             torch.save(mask, f"{out_dir}/mask.pt")
-            print(f"y is nan, {torch.where(torch.isnan(y))}")
+            print(f"Found NaNs in y at indices: {torch.where(torch.isnan(y))}")
+
+            # Replace all representations of problematic jets with zeros.
+            y[problematic_jets] = 0.0
         h_att = self.att_c_proj(y)
 
         if self.config.use_nGPT == 0:
