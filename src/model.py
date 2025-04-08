@@ -137,6 +137,8 @@ class Block(nn.Module):
         # Compute a boolean mask that is True for jets that contain any NaN.
         problematic_jets = torch.isnan(y).any(dim=(1, 2))
         if problematic_jets.any():
+            # Create a boolean mask over the batch dimension to detect jets with any NaNs.
+            nan_mask = torch.isnan(y).any(dim=(1, 2), keepdim=True)  # shape: (B, 1, 1)
             # Optionally save debugging information.
             torch.save(y, f"{out_dir}/y.pt")
             torch.save(hin, f"{out_dir}/hin.pt")
@@ -144,7 +146,7 @@ class Block(nn.Module):
             print(f"Found NaNs in y at indices: {torch.where(torch.isnan(y))}")
 
             # Replace all representations of problematic jets with zeros.
-            y[problematic_jets] = 0.0
+            y = torch.where(nan_mask.expand_as(y), torch.zeros_like(y), y)
         h_att = self.att_c_proj(y)
 
         if self.config.use_nGPT == 0:
