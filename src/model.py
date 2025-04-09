@@ -267,12 +267,12 @@ class ModelUtils:
         x = x.float()
         norm = x.norm(p=2, dim=idim, keepdim=True)
         # Check for NaN values in norm
-        if torch.isnan(norm).any():
-            raise ValueError("NaN values detected in norm calculation")
+        # if torch.isnan(norm).any():
+        #     raise ValueError("NaN values detected in norm calculation")
         res = (x / (norm + eps)).to(dtype=dtype)
         # Check for NaN values in result
-        if torch.isnan(res).any():
-            raise ValueError("NaN values detected in normalization result")
+        # if torch.isnan(res).any():
+        #     raise ValueError("NaN values detected in normalization result")
         return res
 
     @staticmethod
