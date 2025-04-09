@@ -227,15 +227,15 @@ class LayerNorm(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Check for NaN values in input
-        if torch.isnan(x).any():
-            raise ValueError("NaN values detected in LayerNorm input")
+        # if torch.isnan(x).any():
+        #     raise ValueError("NaN values detected in LayerNorm input")
 
         # Apply PyTorch's LayerNorm
         xnorm = self.layer_norm(x)
 
         # Check for NaN values in result
-        if torch.isnan(xnorm).any():
-            raise ValueError("NaN values detected in LayerNorm result")
+        # if torch.isnan(xnorm).any():
+        #     raise ValueError("NaN values detected in LayerNorm result")
 
         return xnorm
 
