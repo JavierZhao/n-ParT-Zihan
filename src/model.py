@@ -351,7 +351,7 @@ class Encoder(nn.Module):
         return mask
 
     def forward(self, inpt, out_dir=None):
-        x = inpt + 0.0
+        x = inpt + 1e-3
         if x.dim() != 3:
             raise ValueError(f"Expected 3D input (batch, particles, features), got {x.dim()}D")
         if x.size(-1) != self.config.input_dim:
