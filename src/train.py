@@ -409,10 +409,10 @@ def main(args):
 
     for epoch in range(epoch_start, args.n_epochs):
         # !!!!!!!
-        check_normalization(model)
-        print("Model loaded and checked. Ready for training!")
-
-        plot_embedding_norms(model, save_path=out_dir)
+        if args.use_nGPT == 1:
+            check_normalization(model)
+            print("Model loaded and checked. Ready for training!")
+            plot_embedding_norms(model, save_path=out_dir)
 
         # initialise timing stats
         te_start = time.time()
@@ -435,7 +435,7 @@ def main(args):
 
         for i, (next_features, next_labels) in enumerate(pbar):
 
-            if i % 50 == 0:
+            if i % 50 == 0 and args.use_nGPT == 1:
                 check_normalization(model)
                 print(f"Model loaded and checked for {epoch}th iter")
                 plot_embedding_norms(

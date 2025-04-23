@@ -96,10 +96,10 @@ class Projector(nn.Module):
                 {
                     # Project to 2x dimension for UV gating
                     "linear": nn.Linear(
-                        dims[i], 2 * dims[i + 1], bias=config.bias, dtype=torch.bfloat16
+                        dims[i], 2 * dims[i + 1], bias=config.bias, dtype=torch.float32
                     ),
                     "proj": nn.Linear(
-                        dims[i + 1], dims[i + 1], bias=config.bias, dtype=torch.bfloat16
+                        dims[i + 1], dims[i + 1], bias=config.bias, dtype=torch.float32
                     ),
                 }
             )
@@ -127,7 +127,7 @@ class Projector(nn.Module):
             if self.config.use_nGPT == 0:
                 hin = self.rmsnorm_layers[i](h)
             else:
-                hin = h.to(dtype=torch.bfloat16)
+                hin = h.to(dtype=torch.float32)
 
             # UV gating
             uv = layer["linear"](hin)
@@ -140,7 +140,7 @@ class Projector(nn.Module):
 
             u, v = torch.chunk(uv, 2, dim=-1)
             x = u * self.silu(v)
-            h = layer["proj"](x.to(dtype=torch.bfloat16))
+            h = layer["proj"](x.to(dtype=torch.float32))
 
         return h
 
