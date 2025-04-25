@@ -42,6 +42,7 @@ import copy
 torch.set_num_threads(2)
 torch.autograd.set_detect_anomaly(True)
 
+
 def load_data(args, dataset_path):
     num_jets = 100 * 1000 if args.small else None
     dataset = ParticleDataset(dataset_path, num_jets=num_jets)
@@ -282,7 +283,9 @@ def main(args):
     # initialise logfile
     args.logfile = f"{out_dir}/logfile.txt"
     logfile = open(args.logfile, "a")
-    print(f"Starting training with args: {args}", )
+    print(
+        f"Starting training with args: {args}",
+    )
 
     # define the global base device
     world_size = torch.cuda.device_count()
@@ -467,7 +470,7 @@ def main(args):
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=args.max_grad_norm
                 )
-                print(f"Gradient norm: {grad_norm}", flush=True, file=logfile)
+                # print(f"Gradient norm: {grad_norm}", flush=True, file=logfile)
             optimizer.step()
 
             if config.use_nGPT == 1:
@@ -511,11 +514,13 @@ def main(args):
             data_iter = iter(val_dataloader)
             # Prefetch the first batch using the same iterator
             features, labels = next(data_iter)
-            features = features.to(dtype=torch.float32).pin_memory().to(args.device, non_blocking=True)
+            features = (
+                features.to(dtype=torch.float32).pin_memory().to(args.device, non_blocking=True)
+            )
             labels = labels.pin_memory().to(args.device, non_blocking=True)
-    
+
             pbar = tqdm(data_iter, total=len(val_dataloader) - 1, desc="Validation")
-    
+
             for i, (next_features, next_labels) in enumerate(pbar):
                 # Process current batch
                 out = model(features.transpose(1, 2))
