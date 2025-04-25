@@ -70,34 +70,43 @@ class Transformer(nn.Module):
                 self.parameters(), lr=self.learning_rate, momentum=0.9
             )
 
-    def forward(
-        self,
-        inpt,
-    ):
+    def forward(self, inpt, use_mask=True):
         """
-        input here is (batch_size, n_constit, 3)
-        but transformer expects (n_constit, batch_size, 3) so we need to transpose
-        if use_mask is True, will mask out all inputs with pT=0
+        inpt: (B, n_constit, feature_dim) with feature_dim >=1 and pT in [:, :, 0]
         """
-        # make a copy
-        x = inpt + 0.0
-        # (batch_size, n_constit)
-        pT_zero = x[:, :, 0] == 0
-        # (batch_size, n_constit)
-        mask = self.make_mask(pT_zero).to(x.device)
-        x = torch.transpose(x, 0, 1)
-        # (n_constit, batch_size, model_dim)
-        x = self.embedding(x)
-        # x = x.to(dtype=torch.float32)
-        # with torch.autocast(device_type="cuda", enabled=False):
-        x = self.transformer(x, mask=mask)
-        # set masked constituents to zero
-        # otherwise the sum will change if the constituents with 0 pT change
-        x[torch.transpose(pT_zero, 0, 1)] = 0
-        # sum over sequence dim
-        # (batch_size, model_dim)
-        x = x.sum(0)
-        return self.head(x)
+        x = inpt.clone()                 # (B, S, D)
+        if use_mask:
+            # build a Boolean pad mask: True where pT==0
+            # shape: (B, S)
+            src_key_padding_mask = (x[:, :, 0] == 0)
+        else:
+            src_key_padding_mask = None
+    
+        # project embeddings & permute for Transformer
+        x = self.embedding(x)            # (B, S, model_dim)
+        x = x.permute(1, 0, 2)           # (S, B, model_dim)
+    
+        # pass through TransformerEncoder using key-padding mask
+        # this will never attend *from* or *to* a padded position
+        x = self.transformer(
+            x,
+            src_key_padding_mask=src_key_padding_mask
+        )                                # (S, B, model_dim)
+    
+        # bring back to (B, S, model_dim)
+        x = x.permute(1, 0, 2)
+    
+        if use_mask:
+            # zero out the representations of masked tokens before summing
+            x = x.masked_fill(
+                src_key_padding_mask.unsqueeze(-1),
+                0.0
+            )                            # (B, S, model_dim)
+    
+        # aggregate over sequence dim
+        x = x.sum(dim=1)                 # (B, model_dim)
+        return self.head(x)              # (B, output_dim)
+
 
     def head(self, x):
         """

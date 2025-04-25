@@ -2,6 +2,7 @@
 
 # load standard python modules
 import sys
+import logging
 
 sys.path.insert(0, "../src")
 import os
@@ -39,7 +40,7 @@ import copy
 
 # set the number of threads that pytorch will use
 torch.set_num_threads(2)
-
+torch.autograd.set_detect_anomaly(True)
 
 def load_data(args, dataset_path):
     num_jets = 100 * 1000 if args.small else None
@@ -281,6 +282,7 @@ def main(args):
     # initialise logfile
     args.logfile = f"{out_dir}/logfile.txt"
     logfile = open(args.logfile, "a")
+    print(f"Starting training with args: {args}", )
 
     # define the global base device
     world_size = torch.cuda.device_count()
@@ -505,23 +507,15 @@ def main(args):
         # validation
         with torch.no_grad():
             model.eval()
-            # Create iterator and wrap with tqdm
+            # Create a single iterator and wrap it with tqdm
             data_iter = iter(val_dataloader)
-            pbar = tqdm(data_iter, total=len(val_dataloader))
-
-            # Prefetch first batch
-            try:
-                features, labels = next(pbar)
-            except StopIteration:
-                features, labels = None, None
-
-            if features is not None:
-                # Ensure consistent device usage
-                features = (
-                    features.to(dtype=torch.float32).pin_memory().to(device, non_blocking=True)
-                )
-                labels = labels.pin_memory().to(device, non_blocking=True)
-
+            # Prefetch the first batch using the same iterator
+            features, labels = next(data_iter)
+            features = features.to(dtype=torch.float32).pin_memory().to(args.device, non_blocking=True)
+            labels = labels.pin_memory().to(args.device, non_blocking=True)
+    
+            pbar = tqdm(data_iter, total=len(val_dataloader) - 1, desc="Validation")
+    
             for i, (next_features, next_labels) in enumerate(pbar):
                 # Process current batch
                 out = model(features.transpose(1, 2))

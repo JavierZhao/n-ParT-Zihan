@@ -8,7 +8,7 @@ from torch.nn import functional as F
 import numpy as np
 
 from transformer import Transformer
-
+from torch.optim import AdamW
 
 class ScaledDotProductAttention(nn.Module):
     def __init__(self):
@@ -143,6 +143,75 @@ class Projector(nn.Module):
             h = layer["proj"](x.to(dtype=torch.float32))
 
         return h
+
+# DNN as encoder, for debugging NaN
+# class Classifier(nn.Module):
+#     def __init__(self, config, proj_dims="auto"):
+#         super().__init__()
+#         self.config = config
+
+#         # 1×1 Convs 接受 (B, 7, N) 直接输入
+#         self.encoder = nn.Sequential(
+#             nn.Conv1d(7,    1024, kernel_size=1),
+#             nn.ReLU(),
+#             nn.Conv1d(1024, 1024, kernel_size=1),
+#             nn.ReLU(),
+#             nn.Conv1d(1024, 1024, kernel_size=1),
+#         )
+
+#         # 初始化 projector
+#         self.projector = Projector(config, dims=proj_dims)
+
+#         # 权重初始化
+#         self.apply(lambda m: ModelUtils.init_weights(m, self.config.base_scale))
+
+#         print(f"number of parameters: {ModelUtils.get_num_params(self) / 1e6:.2f}M")
+
+#     def forward(self, idx):
+#         """
+#         Args:
+#             idx: Tensor of shape (B, 7, N) — B=batch size, 7=features per particle, N=粒子数
+#         Returns:
+#             projected_output: Tensor of shape (B, 2)
+#         """
+#         x = idx.transpose(1,2)
+#         # 通过 1×1 Conv1d
+#         x = self.encoder(x)      # → (B, 1024, N)
+#         # 对粒子维度池化
+#         x = x.mean(dim=2)          # → (B, 1024)
+#         # 下游 projector 输出
+#         projected_output = self.projector(x)  # → (B, 2)
+#         return projected_output
+
+#     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+#         # start with all of the candidate parameters
+#         param_dict = {pn: p for pn, p in self.named_parameters()}
+#         # filter out those that do not require grad
+#         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+#         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+#         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+#         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+#         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+#         optim_groups = [
+#             {"params": decay_params, "weight_decay": weight_decay},
+#             {"params": nodecay_params, "weight_decay": 0.0},
+#         ]
+#         num_decay_params = sum(p.numel() for p in decay_params)
+#         num_nodecay_params = sum(p.numel() for p in nodecay_params)
+#         print(
+#             f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+#         )
+#         print(
+#             f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+#         )
+#         # Create AdamW optimizer and use the fused version if it is available
+#         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
+#         use_fused = fused_available and device_type == "cuda"
+#         extra_args = dict(fused=True) if use_fused else dict()
+#         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+#         print(f"using fused AdamW: {use_fused}")
+#         return optimizer
+
 
 
 class Classifier(nn.Module):
